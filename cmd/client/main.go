@@ -74,7 +74,8 @@ func main() {
 				continue
 			}
 		case "move":
-			/*if len(input) < 3 {
+			/* This is a placeholder for the move command.
+			if len(input) < 3 {
 				fmt.Println("Usage: move <location> <unitID> <unitID> ...")
 				continue
 			} else if input[1] != "asia" && input[1] != "europe" && input[1] != "africa" && input[1] != "america" && input[1] != "antarctica" && input[1] != "australia" {
