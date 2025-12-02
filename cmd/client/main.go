@@ -42,9 +42,15 @@ func main() {
 		return
 	}
 
-	err = pubsub.SubscribeJSON(conn, string(routing.ExchangePerilTopic), "army_moves."+userName, "army_moves.*", false, handlerMove(gameState))
+	err = pubsub.SubscribeJSON(conn, string(routing.ExchangePerilTopic), "army_moves."+userName, "army_moves.*", false, handlerMove(gameState, ch, userName))
 	if err != nil {
 		fmt.Println("Failed to subscribe to army move messages:", err)
+		return
+	}
+
+	err = pubsub.SubscribeJSON(conn, string(routing.ExchangePerilTopic), "war", routing.WarRecognitionsPrefix+".*", true, handlerWar(gameState))
+	if err != nil {
+		fmt.Println("Failed to subscribe to war recognitions:", err)
 		return
 	}
 
@@ -55,33 +61,12 @@ func main() {
 		}
 		switch input[0] {
 		case "spawn":
-			/*if len(input) < 3 {
-				fmt.Println("Usage: spawn <unit_type> <location>")
-				continue
-			} else if len(input) > 3 {
-				fmt.Println("Usage: spawn <unit_type> <location>")
-				continue
-			} else if input[2] != "infantry" && input[2] != "cavalry" && input[2] != "artillery" {
-				fmt.Println("Invalid unit type. Valid types are: infantry, cavalry, artillery")
-				continue
-			} else if input[1] != "asia" && input[1] != "europe" && input[1] != "africa" && input[1] != "america" && input[1] != "antarctica" && input[1] != "australia" {
-				fmt.Println("Invalid location. Valid locations are: asia, europe, africa, america, antarctica, australia")
-				continue
-			}*/
 			err := gameState.CommandSpawn(input)
 			if err != nil {
 				fmt.Println("Error:", err)
 				continue
 			}
 		case "move":
-			/* This is a placeholder for the move command.
-			if len(input) < 3 {
-				fmt.Println("Usage: move <location> <unitID> <unitID> ...")
-				continue
-			} else if input[1] != "asia" && input[1] != "europe" && input[1] != "africa" && input[1] != "america" && input[1] != "antarctica" && input[1] != "australia" {
-				fmt.Println("Invalid location. Valid locations are: asia, europe, africa, america, antarctica, australia")
-				continue
-			}*/
 			move, err := gameState.CommandMove(input)
 			if err != nil {
 				fmt.Println("Error:", err)
@@ -114,7 +99,7 @@ func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) pubsub.Ack
 	}
 }
 
-func handlerMove(gs *gamelogic.GameState) func(gamelogic.ArmyMove) pubsub.AckType {
+func handlerMove(gs *gamelogic.GameState, ch *amqp.Channel, userName string) func(gamelogic.ArmyMove) pubsub.AckType {
 	return func(move gamelogic.ArmyMove) pubsub.AckType {
 		defer fmt.Print("> ")
 		outcome := gs.HandleMove(move)
@@ -122,10 +107,47 @@ func handlerMove(gs *gamelogic.GameState) func(gamelogic.ArmyMove) pubsub.AckTyp
 		case gamelogic.MoveOutComeSafe:
 			return pubsub.Ack
 		case gamelogic.MoveOutcomeMakeWar:
+			// Publish war message to topic exchange
+			war := gamelogic.RecognitionOfWar{
+				Attacker: move.Player,
+				Defender: gs.GetPlayerSnap(),
+			}
+			err := pubsub.PublishJSON(ch, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix+"."+userName, war)
+			if err != nil {
+				fmt.Println("Failed to publish war message:", err)
+				return pubsub.NackRequeue
+			}
 			return pubsub.Ack
 		case gamelogic.MoveOutcomeSamePlayer:
 			return pubsub.NackDiscard
 		default:
+			return pubsub.NackDiscard
+		}
+	}
+}
+
+func handlerWar(gs *gamelogic.GameState) func(gamelogic.RecognitionOfWar) pubsub.AckType {
+	return func(war gamelogic.RecognitionOfWar) pubsub.AckType {
+		defer fmt.Print("> ")
+		outcome, _, _ := gs.HandleWar(war)
+		switch outcome {
+		case gamelogic.WarOutcomeNoUnits:
+			fmt.Println("War could not be processed due to lack of units.")
+			return pubsub.NackDiscard
+		case gamelogic.WarOutcomeNotInvolved:
+			fmt.Println("No involvement in war detected.")
+			return pubsub.NackRequeue
+		case gamelogic.WarOutcomeOpponentWon:
+			fmt.Printf("You have lost the war against %s.\n", war.Attacker.Username)
+			return pubsub.Ack
+		case gamelogic.WarOutcomeYouWon:
+			fmt.Printf("Congratulations! You have won the war against %s.\n", war.Attacker.Username)
+			return pubsub.Ack
+		case gamelogic.WarOutcomeDraw:
+			fmt.Printf("The war between you and %s ended in a draw.\n", war.Attacker.Username)
+			return pubsub.Ack
+		default:
+			fmt.Println("ERROR: Unexpected war outcome.")
 			return pubsub.NackDiscard
 		}
 	}

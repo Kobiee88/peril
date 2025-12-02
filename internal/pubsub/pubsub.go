@@ -42,13 +42,16 @@ func DeclareAndBind(
 		return nil, amqp.Queue{}, err
 	}
 
+	args := amqp.Table{}
+	args["x-dead-letter-exchange"] = "peril_dlx"
+
 	queue, err := ch.QueueDeclare(
 		queueName,
 		queueType,
 		!queueType,
 		!queueType, // exclusive should be false to make queue visible
 		false,
-		nil,
+		args,
 	)
 	if err != nil {
 		return ch, amqp.Queue{}, err
