@@ -33,6 +33,19 @@ func main() {
 		return
 	}
 
+	err = pubsub.SubscribeGob(conn, routing.ExchangePerilTopic, routing.GameLogSlug, "game_logs.*", true, func(gameLog routing.GameLog) pubsub.AckType {
+		fmt.Println("Game log:", gameLog.Message)
+		gamelogic.WriteLog(gameLog)
+		return pubsub.Ack
+	})
+
+	if err != nil {
+		fmt.Println("Failed to subscribe to game log messages:", err)
+		return
+	}
+
+	defer fmt.Print("> ")
+
 	fmt.Println("Server queue declared:", queue.Name)
 
 	gamelogic.PrintServerHelp()

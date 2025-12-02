@@ -1,7 +1,9 @@
 package pubsub
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 
@@ -26,6 +28,23 @@ func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
 	// Publish the JSON message to the specified exchange and routing key
 	return ch.PublishWithContext(context.Background(), exchange, key, false, false, amqp.Publishing{
 		ContentType: "application/json",
+		Body:        body,
+	})
+}
+
+func PublishGob[T any](ch *amqp.Channel, exchange, key string, val T) error {
+	// Serialize the value to GOB
+	var body []byte
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(val); err != nil {
+		return err
+	}
+	body = buf.Bytes()
+
+	// Publish the GOB message to the specified exchange and routing key
+	return ch.PublishWithContext(context.Background(), exchange, key, false, false, amqp.Publishing{
+		ContentType: "application/gob",
 		Body:        body,
 	})
 }
@@ -82,6 +101,10 @@ func SubscribeJSON[T any](
 	if err != nil {
 		return err
 	}
+	err = ch.Qos(10, 0, false)
+	if err != nil {
+		return err
+	}
 	msgs, err := ch.Consume(
 		queue.Name,
 		"",
@@ -99,6 +122,60 @@ func SubscribeJSON[T any](
 		for msg := range msgs {
 			var data T
 			if err := json.Unmarshal(msg.Body, &data); err != nil {
+				msg.Nack(false, false)
+				continue
+			}
+			ackType := handler(data)
+			switch ackType {
+			case Ack:
+				msg.Ack(false)
+				fmt.Println("Acked message successfully")
+			case NackRequeue:
+				msg.Nack(false, true)
+				fmt.Println("Nacked message and requeued")
+			case NackDiscard:
+				msg.Nack(false, false)
+				fmt.Println("Nacked message and discarded")
+			}
+		}
+	}()
+
+	return nil
+}
+
+func SubscribeGob[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	queueType bool, // true for durable, false for transient
+	handler func(T) AckType,
+) error {
+	ch, queue, err := DeclareAndBind(conn, exchange, queueName, key, queueType)
+	if err != nil {
+		return err
+	}
+	err = ch.Qos(10, 0, false)
+	if err != nil {
+		return err
+	}
+	msgs, err := ch.Consume(
+		queue.Name,
+		"",
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		for msg := range msgs {
+			var data T
+			if err := gob.NewDecoder(bytes.NewReader(msg.Body)).Decode(&data); err != nil {
 				msg.Nack(false, false)
 				continue
 			}
